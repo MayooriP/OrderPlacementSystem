@@ -1,40 +1,119 @@
 package com.restaurant.ordersystem.service;
 
+import com.restaurant.ordersystem.exception.ResourceNotFoundException;
 import com.restaurant.ordersystem.model.Customer;
 import com.restaurant.ordersystem.model.Payment;
+import com.restaurant.ordersystem.repository.CustomerRepository;
 import com.restaurant.ordersystem.repository.PaymentRepository;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.UUID;
 
 @Service
 public class PaymentService {
-    
+    private static final Logger logger = LoggerFactory.getLogger(PaymentService.class);
+
     private final PaymentRepository paymentRepository;
-    
-    @Autowired
-    public PaymentService(PaymentRepository paymentRepository) {
+    private final CustomerRepository customerRepository;
+
+    public PaymentService(PaymentRepository paymentRepository, CustomerRepository customerRepository) {
         this.paymentRepository = paymentRepository;
+        this.customerRepository = customerRepository;
     }
-    
-    public Payment createPayment(Customer customer, BigDecimal amount, String paymentMethod) {
+
+    /**
+     * Create a new payment
+     *
+     * @param customerId Customer ID
+     * @param amount Payment amount
+     * @param status Payment status (PAID or PENDING)
+     * @return Payment ID
+     */
+    public String createPayment(Integer customerId, BigDecimal amount, String status) {
+        logger.info("Creating payment for customer ID: {} with amount: {} and status: {}", customerId, amount, status);
+
+        Customer customer = customerRepository.findById(customerId)
+                .orElseThrow(() -> new ResourceNotFoundException("Customer", "id", customerId));
+
         Payment payment = new Payment();
+        payment.setPaymentId(UUID.randomUUID().toString());
         payment.setCustomer(customer);
         payment.setAmount(amount);
-        payment.setPaymentMethod(paymentMethod);
-        payment.setPaymentDate(LocalDateTime.now());
-        
-        // Set payment status based on payment method
-        if ("Pay Online".equalsIgnoreCase(paymentMethod)) {
-            payment.setStatus(Payment.PaymentStatus.Paid);
-        } else if ("Pay at Restaurant".equalsIgnoreCase(paymentMethod)) {
-            payment.setStatus(Payment.PaymentStatus.Pending);
+
+        // Set payment method based on status
+        if ("PAID".equalsIgnoreCase(status)) {
+            payment.setPaymentMethod("Pay Online");
+            payment.setStatus(Payment.PaymentStatus.PAID);
         } else {
-            payment.setStatus(Payment.PaymentStatus.Pending);
+            payment.setPaymentMethod("Pay at Restaurant");
+            payment.setStatus(Payment.PaymentStatus.PENDING);
         }
-        
-        return paymentRepository.save(payment);
+
+        payment.setPaymentDate(LocalDateTime.now());
+        payment.setCreatedDateTime(LocalDateTime.now());
+
+        Payment savedPayment = paymentRepository.save(payment);
+        logger.info("Payment created with ID: {}", savedPayment.getPaymentId());
+
+        return savedPayment.getPaymentId();
+    }
+
+    /**
+     * Get payment by ID
+     *
+     * @param paymentId Payment ID
+     * @return Payment object
+     */
+    public Payment getPaymentById(String paymentId) {
+        if (paymentId == null) {
+            return null;
+        }
+
+        return paymentRepository.findById(paymentId)
+                .orElse(null);
+    }
+
+    /**
+     * Cancel a payment
+     *
+     * @param paymentId Payment ID
+     */
+    public void cancelPayment(String paymentId) {
+        logger.info("Cancelling payment with ID: {}", paymentId);
+
+        Payment payment = paymentRepository.findById(paymentId)
+                .orElseThrow(() -> new ResourceNotFoundException("Payment", "id", paymentId));
+
+        payment.setStatus(Payment.PaymentStatus.CANCELLED);
+        payment.setLastModifiedDateTime(LocalDateTime.now());
+
+        paymentRepository.save(payment);
+        logger.info("Payment cancelled: {}", paymentId);
+    }
+
+    /**
+     * Complete a pending payment
+     *
+     * @param paymentId Payment ID
+     */
+    public void completePayment(String paymentId) {
+        logger.info("Completing payment with ID: {}", paymentId);
+
+        Payment payment = paymentRepository.findById(paymentId)
+                .orElseThrow(() -> new ResourceNotFoundException("Payment", "id", paymentId));
+
+        if (payment.getStatus() == Payment.PaymentStatus.PENDING) {
+            payment.setStatus(Payment.PaymentStatus.PAID);
+            payment.setLastModifiedDateTime(LocalDateTime.now());
+
+            paymentRepository.save(payment);
+            logger.info("Payment completed: {}", paymentId);
+        } else {
+            logger.warn("Cannot complete payment with ID: {} as it is not in PENDING status", paymentId);
+        }
     }
 }

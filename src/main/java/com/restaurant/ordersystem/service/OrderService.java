@@ -1,55 +1,78 @@
 package com.restaurant.ordersystem.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.restaurant.ordersystem.dto.OrderItemDTO;
 import com.restaurant.ordersystem.dto.OrderRequestDTO;
 import com.restaurant.ordersystem.dto.OrderResponseDTO;
 import com.restaurant.ordersystem.exception.InvalidOrderException;
-import com.restaurant.ordersystem.exception.JsonProcessingException;
 import com.restaurant.ordersystem.exception.ResourceNotFoundException;
 import com.restaurant.ordersystem.model.*;
-import com.restaurant.ordersystem.repository.OrderRepository;
+import com.restaurant.ordersystem.repository.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.DayOfWeek;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.time.LocalTime;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
 public class OrderService {
-
     private static final Logger logger = LoggerFactory.getLogger(OrderService.class);
 
+    private final CustomerRepository customerRepository;
+    private final RestaurantRepository restaurantRepository;
+    private final CartRepository cartRepository;
+    private final CartItemRepository cartItemRepository;
+    private final MenuItemRepository menuItemRepository;
+    private final VariantRepository variantRepository;
     private final OrderRepository orderRepository;
-    private final CustomerService customerService;
-    private final RestaurantService restaurantService;
-    private final CartService cartService;
-    private final DiscountService discountService;
+    private final OrderItemRepository orderItemRepository;
+    private final CouponRepository couponRepository;
+    private final VoucherRepository voucherRepository;
+    private final ReferralRepository referralRepository;
+    private final RestaurantWorkingHoursRepository restaurantWorkingHoursRepository;
     private final PaymentService paymentService;
+    private final DiscountService discountService;
     private final DynamoDBService dynamoDBService;
     private final ObjectMapper objectMapper;
 
-    public OrderService(OrderRepository orderRepository,
-                       CustomerService customerService,
-                       RestaurantService restaurantService,
-                       CartService cartService,
-                       DiscountService discountService,
-                       PaymentService paymentService,
-                       DynamoDBService dynamoDBService,
-                       ObjectMapper objectMapper) {
+    public OrderService(CustomerRepository customerRepository,
+                        RestaurantRepository restaurantRepository,
+                        CartRepository cartRepository,
+                        CartItemRepository cartItemRepository,
+                        MenuItemRepository menuItemRepository,
+                        VariantRepository variantRepository,
+                        OrderRepository orderRepository,
+                        OrderItemRepository orderItemRepository,
+                        CouponRepository couponRepository,
+                        VoucherRepository voucherRepository,
+                        ReferralRepository referralRepository,
+                        RestaurantWorkingHoursRepository restaurantWorkingHoursRepository,
+                        PaymentService paymentService,
+                        DiscountService discountService,
+                        DynamoDBService dynamoDBService,
+                        ObjectMapper objectMapper) {
+        this.customerRepository = customerRepository;
+        this.restaurantRepository = restaurantRepository;
+        this.cartRepository = cartRepository;
+        this.cartItemRepository = cartItemRepository;
+        this.menuItemRepository = menuItemRepository;
+        this.variantRepository = variantRepository;
         this.orderRepository = orderRepository;
-        this.customerService = customerService;
-        this.restaurantService = restaurantService;
-        this.cartService = cartService;
-        this.discountService = discountService;
+        this.orderItemRepository = orderItemRepository;
+        this.couponRepository = couponRepository;
+        this.voucherRepository = voucherRepository;
+        this.referralRepository = referralRepository;
+        this.restaurantWorkingHoursRepository = restaurantWorkingHoursRepository;
         this.paymentService = paymentService;
+        this.discountService = discountService;
         this.dynamoDBService = dynamoDBService;
         this.objectMapper = objectMapper;
     }
@@ -60,67 +83,212 @@ public class OrderService {
         validateOrderRequest(orderRequest);
 
         // 2. Get customer and restaurant
-        Customer customer = customerService.getCustomerById(orderRequest.getCustomerId());
-        Restaurant restaurant = restaurantService.getRestaurantById(orderRequest.getRestaurantId());
+        Customer customer = customerRepository.findById(orderRequest.getCustomerId())
+                .orElseThrow(() -> new ResourceNotFoundException("Customer", "id", orderRequest.getCustomerId()));
 
-        // 3. Validate restaurant availability
-        restaurantService.validateRestaurantAvailability(orderRequest.getRestaurantId(), orderRequest.getDeliveryDate());
+        Restaurant restaurant = restaurantRepository.findById(orderRequest.getRestaurantId())
+                .orElseThrow(() -> new ResourceNotFoundException("Restaurant", "id", orderRequest.getRestaurantId()));
 
-        // 4. Validate cart has items
-        cartService.validateCartHasItems(orderRequest.getCustomerId());
-        Cart cart = cartService.getActiveCartByCustomerId(orderRequest.getCustomerId());
+        // 3. Check restaurant availability
+        checkRestaurantAvailability(restaurant, orderRequest.getDeliveryDate());
 
-        // 5. Validate and apply discount
-        Coupon coupon = null;
-        BigDecimal discountAmount = BigDecimal.ZERO;
+        // 4. Get active cart for customer
+        Cart cart = cartRepository.findByCustomerAndStatus(customer, "ACTIVE")
+                .orElseThrow(() -> new InvalidOrderException("No active cart found for customer"));
 
-        if (orderRequest.getCouponCode() != null && !orderRequest.getCouponCode().isEmpty()) {
-            coupon = discountService.validateCoupon(orderRequest.getCouponCode());
-            discountAmount = discountService.calculateCouponDiscount(coupon, cart.getTotalAmount());
+        // 5. Check if cart has items
+        List<CartItem> cartItems = cartItemRepository.findByCart(cart);
+        if (cartItems.isEmpty()) {
+            throw new InvalidOrderException("Cart is empty. Cannot place order with empty cart.");
         }
 
-        // 6. Calculate final price
+        // 6. Calculate prices and apply discounts
         BigDecimal totalPrice = cart.getTotalAmount();
-        BigDecimal finalPrice = totalPrice.subtract(discountAmount);
+        BigDecimal discountValue = BigDecimal.ZERO;
+        String appliedCouponCode = null;
+
+        // Apply coupon/voucher/referral if provided
+        if (orderRequest.getCouponCode() != null && !orderRequest.getCouponCode().isEmpty()) {
+            // Try to apply as coupon
+            try {
+                Coupon coupon = couponRepository.findByCouponCode(orderRequest.getCouponCode())
+                        .orElse(null);
+
+                if (coupon != null) {
+                    discountValue = discountService.applyCouponDiscount(coupon, totalPrice);
+                    appliedCouponCode = coupon.getCouponCode();
+                } else {
+                    // Try to apply as voucher
+                    Voucher voucher = voucherRepository.findByVoucherCode(orderRequest.getCouponCode())
+                            .orElse(null);
+
+                    if (voucher != null) {
+                        discountValue = discountService.applyVoucherDiscount(voucher, totalPrice);
+                        appliedCouponCode = voucher.getVoucherCode();
+                    } else {
+                        // Try to apply as referral
+                        Referral referral = referralRepository.findByReferralCode(orderRequest.getCouponCode())
+                                .orElse(null);
+
+                        if (referral != null && referral.getStatus().equals("ACTIVE")) {
+                            discountValue = discountService.applyReferralDiscount(referral, totalPrice);
+                            appliedCouponCode = referral.getReferralCode();
+
+                            // Mark referral as used
+                            referral.setStatus(Referral.ReferralStatus.Used);
+                            referralRepository.save(referral);
+                        } else {
+                            logger.warn("Invalid coupon/voucher/referral code: {}", orderRequest.getCouponCode());
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                logger.error("Error applying discount: {}", e.getMessage());
+            }
+        }
+
+        BigDecimal finalPrice = totalPrice.subtract(discountValue);
 
         // 7. Create payment
-        Payment payment = paymentService.createPayment(customer, finalPrice, orderRequest.getPaymentMethod());
+        String paymentId = paymentService.createPayment(
+                customer.getCustomerId(),
+                finalPrice,
+                orderRequest.getPaymentMethod().equals("Pay Online") ? "PAID" : "PENDING"
+        );
 
         // 8. Create order
         Order order = new Order();
         order.setCustomer(customer);
         order.setRestaurant(restaurant);
-        order.setPaymentId(payment.getPaymentId());
+        order.setPaymentId(paymentId);
         order.setOrderDate(orderRequest.getOrderDate());
         order.setDeliveryDate(orderRequest.getDeliveryDate());
         order.setStatus(Order.OrderStatus.Received);
-        order.setCoupon(coupon);
         order.setPickupInstructions(orderRequest.getPickupInstructions());
         order.setLastModifiedDateTime(LocalDateTime.now());
 
-        // 9. Create status history
+        // Set coupon if applied
+        if (appliedCouponCode != null) {
+            Coupon coupon = couponRepository.findByCouponCode(appliedCouponCode).orElse(null);
+            if (coupon != null) {
+                order.setCoupon(coupon);
+            }
+        }
+
+        // Create status history
         Map<String, Object> statusEntry = new HashMap<>();
         statusEntry.put("status", Order.OrderStatus.Received.name());
         statusEntry.put("timestamp", LocalDateTime.now().toString());
+        statusEntry.put("notes", "Order received");
 
         try {
-            order.setStatusHistory(objectMapper.writeValueAsString(List.of(statusEntry)));
-        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-            throw new JsonProcessingException("Error creating status history", e);
+            order.setStatusHistory(objectMapper.writeValueAsString(Collections.singletonList(statusEntry)));
+        } catch (JsonProcessingException e) {
+            logger.error("Error creating status history: {}", e.getMessage());
+            order.setStatusHistory("[]");
         }
 
-        // 10. Create order items from cart items
-        List<OrderItem> orderItems = createOrderItemsFromCart(cart, order);
-        order.setOrderItems(orderItems);
-
-        // 11. Save order
+        // Save order
         Order savedOrder = orderRepository.save(order);
 
-        // 12. Create response DTO
-        OrderResponseDTO responseDTO = createOrderResponseDTO(savedOrder, totalPrice, discountAmount, finalPrice);
+        // 9. Create order items
+        List<OrderItem> orderItems = new ArrayList<>();
+        List<OrderItemDTO> orderItemDTOs = new ArrayList<>();
 
-        // 13. Save to DynamoDB
-        dynamoDBService.saveOrderToDynamoDB(responseDTO);
+        for (CartItem cartItem : cartItems) {
+            MenuItem menuItem = cartItem.getMenuItem();
+            Variant variant = cartItem.getVariant();
+
+            // Create order item
+            OrderItem orderItem = new OrderItem();
+            orderItem.setOrder(savedOrder);
+            orderItem.setMenuItem(menuItem);
+            orderItem.setVariant(variant);
+            orderItem.setQuantity(cartItem.getQuantity());
+            orderItem.setPrice(cartItem.getPrice());
+            orderItem.setSubtotal(cartItem.getSubtotal());
+            orderItem.setSpecialInstructions(cartItem.getSpecialInstructions());
+            orderItem.setIsFreeItem(false);
+
+            // Set item name and category details
+            orderItem.setItemName(menuItem.getName());
+
+            if (menuItem.getCategory() != null) {
+                orderItem.setCategoryName(menuItem.getCategory().getName());
+            }
+
+            if (menuItem.getSubCategory() != null) {
+                orderItem.setSubCategoryName(menuItem.getSubCategory().getName());
+            }
+
+            // Set variant name if available
+            if (variant != null) {
+                orderItem.setVariantName(variant.getVariantName());
+            }
+
+            // Save order item
+            OrderItem savedOrderItem = orderItemRepository.save(orderItem);
+            orderItems.add(savedOrderItem);
+
+            // Create DTO for response
+            OrderItemDTO itemDTO = new OrderItemDTO();
+            itemDTO.setOrderItemId(savedOrderItem.getOrderItemId());
+            itemDTO.setMenuItemId(menuItem.getItemId());
+            itemDTO.setMenuItemName(menuItem.getName());
+            itemDTO.setQuantity(cartItem.getQuantity());
+            itemDTO.setPrice(cartItem.getPrice());
+            itemDTO.setSubtotal(cartItem.getSubtotal());
+            itemDTO.setSpecialInstructions(cartItem.getSpecialInstructions());
+            itemDTO.setIsFreeItem(false);
+
+            if (menuItem.getCategory() != null) {
+                itemDTO.setCategoryName(menuItem.getCategory().getName());
+            }
+
+            if (menuItem.getSubCategory() != null) {
+                itemDTO.setSubCategoryName(menuItem.getSubCategory().getName());
+            }
+
+            if (variant != null) {
+                itemDTO.setVariantId(variant.getVariantId());
+                itemDTO.setVariantName(variant.getVariantName());
+            }
+
+            orderItemDTOs.add(itemDTO);
+        }
+
+        // 10. Clear the cart
+        cartItems.forEach(cartItemRepository::delete);
+        cart.setStatus("COMPLETED");
+        cart.setLastModifiedDateTime(LocalDateTime.now());
+        cartRepository.save(cart);
+
+        // 11. Store order in DynamoDB
+        try {
+            dynamoDBService.saveOrder(savedOrder, customer, restaurant, orderItems);
+        } catch (Exception e) {
+            logger.error("Error saving order to DynamoDB: {}", e.getMessage());
+        }
+
+        // 12. Create response
+        OrderResponseDTO responseDTO = new OrderResponseDTO();
+        responseDTO.setOrderId(savedOrder.getOrderId());
+        responseDTO.setCustomerId(customer.getCustomerId());
+        responseDTO.setCustomerName(customer.getFullName());
+        responseDTO.setRestaurantId(restaurant.getRestaurantId());
+        responseDTO.setRestaurantName(restaurant.getName());
+        responseDTO.setPaymentId(paymentId);
+        responseDTO.setPaymentMethod(orderRequest.getPaymentMethod());
+        responseDTO.setPaymentStatus(orderRequest.getPaymentMethod().equals("Pay Online") ? "Paid" : "Pending");
+        responseDTO.setOrderDate(orderRequest.getOrderDate());
+        responseDTO.setDeliveryDate(orderRequest.getDeliveryDate());
+        responseDTO.setOrderStatus(Order.OrderStatus.Received.name());
+        responseDTO.setTotalPrice(totalPrice);
+        responseDTO.setDiscountValue(discountValue);
+        responseDTO.setFinalPrice(finalPrice);
+        responseDTO.setCouponCode(appliedCouponCode);
+        responseDTO.setPickupInstructions(orderRequest.getPickupInstructions());
+        responseDTO.setOrderItems(orderItemDTOs);
 
         return responseDTO;
     }
@@ -138,8 +306,9 @@ public class OrderService {
             throw new InvalidOrderException("Payment method is required");
         }
 
-        if (!orderRequest.getPaymentMethod().equals("Pay Online") && !orderRequest.getPaymentMethod().equals("Pay at Restaurant")) {
-            throw new InvalidOrderException("Invalid payment method. Allowed values: 'Pay Online' or 'Pay at Restaurant'");
+        if (!orderRequest.getPaymentMethod().equals("Pay Online") &&
+            !orderRequest.getPaymentMethod().equals("Pay at Restaurant")) {
+            throw new InvalidOrderException("Invalid payment method. Allowed values: 'Pay Online', 'Pay at Restaurant'");
         }
 
         if (orderRequest.getOrderDate() == null) {
@@ -155,67 +324,84 @@ public class OrderService {
         }
     }
 
-    private List<OrderItem> createOrderItemsFromCart(Cart cart, Order order) {
-        List<OrderItem> orderItems = new ArrayList<>();
+    private void checkRestaurantAvailability(Restaurant restaurant, LocalDateTime deliveryDateTime) {
+        // Get day of week
+        DayOfWeek dayOfWeek = deliveryDateTime.getDayOfWeek();
 
-        for (CartItem cartItem : cart.getCartItems()) {
-            OrderItem orderItem = new OrderItem();
-            orderItem.setOrder(order);
-            orderItem.setMenuItem(cartItem.getMenuItem());
-            orderItem.setVariant(cartItem.getVariant());
-            orderItem.setItemName(cartItem.getMenuItem().getName());
-            orderItem.setCategoryName(cartItem.getMenuItem().getCategory() != null ?
-                    cartItem.getMenuItem().getCategory().getName() : null);
-            orderItem.setSubCategoryName(cartItem.getMenuItem().getSubCategory() != null ?
-                    cartItem.getMenuItem().getSubCategory().getName() : null);
-            orderItem.setVariantName(cartItem.getVariant() != null ?
-                    cartItem.getVariant().getVariantName() : null);
-            orderItem.setPrice(cartItem.getPrice());
-            orderItem.setQuantity(cartItem.getQuantity());
-            orderItem.setSubtotal(cartItem.getSubtotal());
-            orderItem.setSpecialInstructions(cartItem.getSpecialInstructions());
-            orderItem.setIsFreeItem(false);
+        // Get time of day
+        LocalTime deliveryTime = deliveryDateTime.toLocalTime();
 
-            orderItems.add(orderItem);
+        // Check restaurant working hours from database
+        String dayName = dayOfWeek.toString();
+        List<RestaurantWorkingHours> workingHours = restaurantWorkingHoursRepository
+                .findByRestaurantAndDayOfTheWeek(restaurant, dayName);
+
+        if (workingHours.isEmpty()) {
+            // If no specific hours defined for this day, check the default hours
+            // Restaurant works Tue - Sun 11:00 AM - 2:00 PM and 5:00PM to 10:00PM
+
+            // Restaurant is closed on Mondays
+            if (dayOfWeek == DayOfWeek.MONDAY) {
+                throw new InvalidOrderException("Restaurant is closed on Mondays");
+            }
+
+            // Check if time is within operating hours (11:00 AM - 2:00 PM or 5:00 PM - 10:00 PM)
+            boolean isLunchHours = deliveryTime.isAfter(LocalTime.of(11, 0)) &&
+                                   deliveryTime.isBefore(LocalTime.of(14, 0));
+
+            boolean isDinnerHours = deliveryTime.isAfter(LocalTime.of(17, 0)) &&
+                                    deliveryTime.isBefore(LocalTime.of(22, 0));
+
+            if (!isLunchHours && !isDinnerHours) {
+                throw new InvalidOrderException("Restaurant is only open from 11:00 AM - 2:00 PM and 5:00 PM - 10:00 PM");
+            }
+        } else {
+            // Check if the delivery time is within any of the defined working hours
+            boolean isWithinWorkingHours = false;
+            for (RestaurantWorkingHours hours : workingHours) {
+                if (deliveryTime.isAfter(hours.getStartTime()) && deliveryTime.isBefore(hours.getEndTime())) {
+                    isWithinWorkingHours = true;
+                    break;
+                }
+            }
+
+            if (!isWithinWorkingHours) {
+                throw new InvalidOrderException("Restaurant is not open at the requested delivery time");
+            }
         }
-
-        return orderItems;
-    }
-
-    public List<OrderResponseDTO> getAllOrders() {
-        List<Order> orders = orderRepository.findAll();
-        return orders.stream()
-                .map(this::convertToOrderResponseDTO)
-                .collect(Collectors.toList());
     }
 
     public OrderResponseDTO getOrderById(String orderId) {
         Order order = orderRepository.findById(orderId)
                 .orElseThrow(() -> new ResourceNotFoundException("Order", "id", orderId));
-        return convertToOrderResponseDTO(order);
+
+        return convertToDTO(order);
+    }
+
+    public List<OrderResponseDTO> getAllOrders() {
+        List<Order> orders = orderRepository.findAll();
+        return orders.stream().map(this::convertToDTO).collect(Collectors.toList());
     }
 
     public List<OrderResponseDTO> getOrdersByCustomerId(Integer customerId) {
-        Customer customer = customerService.getCustomerById(customerId);
+        Customer customer = customerRepository.findById(customerId)
+                .orElseThrow(() -> new ResourceNotFoundException("Customer", "id", customerId));
+
         List<Order> orders = orderRepository.findByCustomer(customer);
-        return orders.stream()
-                .map(this::convertToOrderResponseDTO)
-                .collect(Collectors.toList());
+        return orders.stream().map(this::convertToDTO).collect(Collectors.toList());
     }
 
     public List<OrderResponseDTO> getOrdersByRestaurantId(Integer restaurantId) {
-        Restaurant restaurant = restaurantService.getRestaurantById(restaurantId);
+        Restaurant restaurant = restaurantRepository.findById(restaurantId)
+                .orElseThrow(() -> new ResourceNotFoundException("Restaurant", "id", restaurantId));
+
         List<Order> orders = orderRepository.findByRestaurant(restaurant);
-        return orders.stream()
-                .map(this::convertToOrderResponseDTO)
-                .collect(Collectors.toList());
+        return orders.stream().map(this::convertToDTO).collect(Collectors.toList());
     }
 
     public List<OrderResponseDTO> getOrdersByDateRange(LocalDateTime startDate, LocalDateTime endDate) {
         List<Order> orders = orderRepository.findByOrderDateBetween(startDate, endDate);
-        return orders.stream()
-                .map(this::convertToOrderResponseDTO)
-                .collect(Collectors.toList());
+        return orders.stream().map(this::convertToDTO).collect(Collectors.toList());
     }
 
     @Transactional
@@ -234,96 +420,96 @@ public class OrderService {
 
         // Update status history
         try {
-            // Parse existing status history
             List<Map<String, Object>> statusHistory = objectMapper.readValue(
                     order.getStatusHistory(),
-                    objectMapper.getTypeFactory().constructCollectionType(List.class, Map.class));
+                    objectMapper.getTypeFactory().constructCollectionType(List.class, Map.class)
+            );
 
-            // Add new status entry
             Map<String, Object> statusEntry = new HashMap<>();
             statusEntry.put("status", Order.OrderStatus.Cancelled.name());
             statusEntry.put("timestamp", LocalDateTime.now().toString());
-            statusHistory.add(statusEntry);
+            statusEntry.put("notes", "Order cancelled");
 
-            // Update status history in order
+            statusHistory.add(statusEntry);
             order.setStatusHistory(objectMapper.writeValueAsString(statusHistory));
-        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-            throw new JsonProcessingException("Error updating status history", e);
+        } catch (Exception e) {
+            logger.error("Error updating status history: {}", e.getMessage());
         }
 
-        // Save updated order
-        Order updatedOrder = orderRepository.save(order);
+        Order savedOrder = orderRepository.save(order);
 
-        // Return updated order response
-        return convertToOrderResponseDTO(updatedOrder);
+        // Update payment status if needed
+        if (savedOrder.getPaymentId() != null) {
+            paymentService.cancelPayment(savedOrder.getPaymentId());
+        }
+
+        return convertToDTO(savedOrder);
     }
 
-    private OrderResponseDTO convertToOrderResponseDTO(Order order) {
-        // Calculate total price from order items
-        BigDecimal totalPrice = order.getOrderItems().stream()
-                .map(OrderItem::getSubtotal)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    private OrderResponseDTO convertToDTO(Order order) {
+        OrderResponseDTO dto = new OrderResponseDTO();
+        dto.setOrderId(order.getOrderId());
+        dto.setCustomerId(order.getCustomer().getCustomerId());
+        dto.setCustomerName(order.getCustomer().getFullName());
+        dto.setRestaurantId(order.getRestaurant().getRestaurantId());
+        dto.setRestaurantName(order.getRestaurant().getName());
+        dto.setPaymentId(order.getPaymentId());
 
-        // Calculate discount value (if coupon exists)
+        // Get payment details
+        Payment payment = paymentService.getPaymentById(order.getPaymentId());
+        if (payment != null) {
+            dto.setPaymentMethod(payment.getPaymentMethod());
+            dto.setPaymentStatus(payment.getStatus().name());
+        }
+
+        dto.setOrderDate(order.getOrderDate());
+        dto.setDeliveryDate(order.getDeliveryDate());
+        dto.setOrderStatus(order.getStatus().name());
+
+        // Get order items
+        List<OrderItem> orderItems = orderRepository.findOrderItemsByOrder(order);
+        List<OrderItemDTO> orderItemDTOs = new ArrayList<>();
+
+        BigDecimal totalPrice = BigDecimal.ZERO;
+
+        for (OrderItem item : orderItems) {
+            OrderItemDTO itemDTO = new OrderItemDTO();
+            itemDTO.setOrderItemId(item.getOrderItemId());
+            itemDTO.setMenuItemId(item.getMenuItem().getItemId());
+            itemDTO.setMenuItemName(item.getMenuItem().getName());
+            itemDTO.setQuantity(item.getQuantity());
+            itemDTO.setPrice(item.getPrice());
+            itemDTO.setSubtotal(item.getSubtotal());
+            itemDTO.setSpecialInstructions(item.getSpecialInstructions());
+
+            if (item.getVariant() != null) {
+                itemDTO.setVariantId(item.getVariant().getVariantId());
+                itemDTO.setVariantName(item.getVariant().getVariantName());
+            }
+
+            orderItemDTOs.add(itemDTO);
+            totalPrice = totalPrice.add(item.getSubtotal());
+        }
+
+        dto.setOrderItems(orderItemDTOs);
+        dto.setTotalPrice(totalPrice);
+
+        // Calculate discount
         BigDecimal discountValue = BigDecimal.ZERO;
         if (order.getCoupon() != null) {
-            discountValue = discountService.calculateCouponDiscount(order.getCoupon(), totalPrice);
+            dto.setCouponCode(order.getCoupon().getCouponCode());
+            discountValue = discountService.calculateDiscount(order.getCoupon(), totalPrice);
         }
 
-        // Calculate final price
-        BigDecimal finalPrice = totalPrice.subtract(discountValue);
-
-        return createOrderResponseDTO(order, totalPrice, discountValue, finalPrice);
-    }
-
-    private OrderResponseDTO createOrderResponseDTO(Order order, BigDecimal totalPrice,
-                                                   BigDecimal discountAmount, BigDecimal finalPrice) {
-        OrderResponseDTO responseDTO = new OrderResponseDTO();
-        responseDTO.setOrderId(order.getOrderId());
-        responseDTO.setCustomerId(order.getCustomer().getCustomerId());
-        responseDTO.setCustomerName(order.getCustomer().getFullName());
-        responseDTO.setRestaurantId(order.getRestaurant().getRestaurantId());
-        responseDTO.setRestaurantName(order.getRestaurant().getName());
-        responseDTO.setPaymentId(order.getPaymentId());
-        responseDTO.setPaymentMethod(order.getPaymentId() != null ?
-                order.getPaymentId() : "Not Available");
-        responseDTO.setPaymentStatus("Pending");
-        responseDTO.setOrderDate(order.getOrderDate());
-        responseDTO.setDeliveryDate(order.getDeliveryDate());
-        responseDTO.setOrderStatus(order.getStatus().name());
-        responseDTO.setTotalPrice(totalPrice);
-        responseDTO.setDiscountValue(discountAmount);
-        responseDTO.setFinalPrice(finalPrice);
-
-        if (order.getCoupon() != null) {
-            responseDTO.setCouponCode(order.getCoupon().getCouponCode());
-        }
-
-        responseDTO.setPickupInstructions(order.getPickupInstructions());
-
-        List<OrderItemDTO> orderItemDTOs = order.getOrderItems().stream()
-                .map(this::convertToOrderItemDTO)
-                .collect(Collectors.toList());
-
-        responseDTO.setOrderItems(orderItemDTOs);
-
-        return responseDTO;
-    }
-
-    private OrderItemDTO convertToOrderItemDTO(OrderItem orderItem) {
-        OrderItemDTO dto = new OrderItemDTO();
-        dto.setItemId(orderItem.getMenuItem() != null ? orderItem.getMenuItem().getItemId() : null);
-        dto.setItemName(orderItem.getItemName());
-        dto.setVariantId(orderItem.getVariant() != null ? orderItem.getVariant().getVariantId() : null);
-        dto.setVariantName(orderItem.getVariantName());
-        dto.setCategoryName(orderItem.getCategoryName());
-        dto.setSubCategoryName(orderItem.getSubCategoryName());
-        dto.setPrice(orderItem.getPrice());
-        dto.setQuantity(orderItem.getQuantity());
-        dto.setSubtotal(orderItem.getSubtotal());
-        dto.setSpecialInstructions(orderItem.getSpecialInstructions());
-        dto.setIsFreeItem(orderItem.getIsFreeItem());
+        dto.setDiscountValue(discountValue);
+        dto.setFinalPrice(totalPrice.subtract(discountValue));
+        dto.setPickupInstructions(order.getPickupInstructions());
 
         return dto;
     }
 }
+
+
+
+
+
