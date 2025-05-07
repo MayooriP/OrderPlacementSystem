@@ -5,10 +5,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.restaurant.ordersystem.dto.OrderItemDTO;
 import com.restaurant.ordersystem.dto.OrderRequestDTO;
 import com.restaurant.ordersystem.dto.OrderResponseDTO;
+import com.restaurant.ordersystem.exception.InvalidCouponException;
 import com.restaurant.ordersystem.exception.InvalidOrderException;
 import com.restaurant.ordersystem.exception.ResourceNotFoundException;
 import com.restaurant.ordersystem.model.*;
 import com.restaurant.ordersystem.repository.*;
+import com.restaurant.ordersystem.util.RestaurantHoursUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -41,6 +43,7 @@ public class OrderService {
     private final PaymentService paymentService;
     private final DiscountService discountService;
     private final DynamoDBService dynamoDBService;
+    private final RestaurantHoursUtil restaurantHoursUtil;
     private final ObjectMapper objectMapper;
 
     public OrderService(CustomerRepository customerRepository,
@@ -58,6 +61,7 @@ public class OrderService {
                         PaymentService paymentService,
                         DiscountService discountService,
                         DynamoDBService dynamoDBService,
+                        RestaurantHoursUtil restaurantHoursUtil,
                         ObjectMapper objectMapper) {
         this.customerRepository = customerRepository;
         this.restaurantRepository = restaurantRepository;
@@ -74,6 +78,7 @@ public class OrderService {
         this.paymentService = paymentService;
         this.discountService = discountService;
         this.dynamoDBService = dynamoDBService;
+        this.restaurantHoursUtil = restaurantHoursUtil;
         this.objectMapper = objectMapper;
     }
 
@@ -111,34 +116,40 @@ public class OrderService {
         if (orderRequest.getCouponCode() != null && !orderRequest.getCouponCode().isEmpty()) {
             // Try to apply as coupon
             try {
-                Coupon coupon = couponRepository.findByCouponCode(orderRequest.getCouponCode())
-                        .orElse(null);
+                try {
+                    Coupon coupon = discountService.validateCoupon(orderRequest.getCouponCode());
 
-                if (coupon != null) {
-                    discountValue = discountService.applyCouponDiscount(coupon, totalPrice);
-                    appliedCouponCode = coupon.getCouponCode();
-                } else {
+                    if (coupon != null) {
+                        discountValue = discountService.applyCouponDiscount(coupon, totalPrice);
+                        appliedCouponCode = coupon.getCouponCode();
+                    }
+                } catch (InvalidCouponException e) {
+                    logger.info("Not a valid coupon, trying as voucher: {}", e.getMessage());
+
                     // Try to apply as voucher
-                    Voucher voucher = voucherRepository.findByVoucherCode(orderRequest.getCouponCode())
-                            .orElse(null);
+                    try {
+                        Voucher voucher = discountService.validateVoucher(orderRequest.getCouponCode());
 
-                    if (voucher != null) {
-                        discountValue = discountService.applyVoucherDiscount(voucher, totalPrice);
-                        appliedCouponCode = voucher.getVoucherCode();
-                    } else {
+                        if (voucher != null) {
+                            discountValue = discountService.applyVoucherDiscount(voucher, totalPrice);
+                            appliedCouponCode = voucher.getVoucherCode();
+                        }
+                    } catch (InvalidCouponException ve) {
+                        logger.info("Not a valid voucher: {}", ve.getMessage());
+
                         // Try to apply as referral
-                        Referral referral = referralRepository.findByReferralCode(orderRequest.getCouponCode())
-                                .orElse(null);
+                        try {
+                            Referral referral = discountService.validateReferral(orderRequest.getCouponCode(), customer);
 
-                        if (referral != null && referral.getStatus().equals("ACTIVE")) {
-                            discountValue = discountService.applyReferralDiscount(referral, totalPrice);
-                            appliedCouponCode = referral.getReferralCode();
+                            if (referral != null) {
+                                discountValue = discountService.applyReferralDiscount(referral, totalPrice);
+                                appliedCouponCode = referral.getReferralCode();
 
-                            // Mark referral as used
-                            referral.setStatus(Referral.ReferralStatus.Used);
-                            referralRepository.save(referral);
-                        } else {
-                            logger.warn("Invalid coupon/voucher/referral code: {}", orderRequest.getCouponCode());
+                                // Mark referral as used
+                                discountService.markReferralAsUsed(referral);
+                            }
+                        } catch (Exception ex) {
+                            logger.warn("Invalid referral code: {} - {}", orderRequest.getCouponCode(), ex.getMessage());
                         }
                     }
                 }
@@ -325,48 +336,44 @@ public class OrderService {
     }
 
     private void checkRestaurantAvailability(Restaurant restaurant, LocalDateTime deliveryDateTime) {
-        // Get day of week
-        DayOfWeek dayOfWeek = deliveryDateTime.getDayOfWeek();
+        // Use the RestaurantHoursUtil to check if the restaurant is open
+        if (!restaurantHoursUtil.isRestaurantOpen(restaurant, deliveryDateTime)) {
+            DayOfWeek dayOfWeek = deliveryDateTime.getDayOfWeek();
+            String dayName = dayOfWeek.toString();
 
-        // Get time of day
-        LocalTime deliveryTime = deliveryDateTime.toLocalTime();
+            // Get working hours for this day to provide a helpful error message
+            List<RestaurantWorkingHours> workingHours = restaurantHoursUtil.getWorkingHoursForDay(restaurant, dayOfWeek);
 
-        // Check restaurant working hours from database
-        String dayName = dayOfWeek.toString();
-        List<RestaurantWorkingHours> workingHours = restaurantWorkingHoursRepository
-                .findByRestaurantAndDayOfTheWeek(restaurant, dayName);
+            if (workingHours.isEmpty()) {
+                // No specific hours defined for this day, check default hours
+                List<RestaurantHoursUtil.TimeRange> defaultHours = restaurantHoursUtil.getDefaultWorkingHours(dayOfWeek);
 
-        if (workingHours.isEmpty()) {
-            // If no specific hours defined for this day, check the default hours
-            // Restaurant works Tue - Sun 11:00 AM - 2:00 PM and 5:00PM to 10:00PM
-
-            // Restaurant is closed on Mondays
-            if (dayOfWeek == DayOfWeek.MONDAY) {
-                throw new InvalidOrderException("Restaurant is closed on Mondays");
-            }
-
-            // Check if time is within operating hours (11:00 AM - 2:00 PM or 5:00 PM - 10:00 PM)
-            boolean isLunchHours = deliveryTime.isAfter(LocalTime.of(11, 0)) &&
-                                   deliveryTime.isBefore(LocalTime.of(14, 0));
-
-            boolean isDinnerHours = deliveryTime.isAfter(LocalTime.of(17, 0)) &&
-                                    deliveryTime.isBefore(LocalTime.of(22, 0));
-
-            if (!isLunchHours && !isDinnerHours) {
-                throw new InvalidOrderException("Restaurant is only open from 11:00 AM - 2:00 PM and 5:00 PM - 10:00 PM");
-            }
-        } else {
-            // Check if the delivery time is within any of the defined working hours
-            boolean isWithinWorkingHours = false;
-            for (RestaurantWorkingHours hours : workingHours) {
-                if (deliveryTime.isAfter(hours.getStartTime()) && deliveryTime.isBefore(hours.getEndTime())) {
-                    isWithinWorkingHours = true;
-                    break;
+                if (defaultHours.isEmpty()) {
+                    // Restaurant is closed on this day
+                    throw new InvalidOrderException("Restaurant is closed on " + dayName + "s");
+                } else {
+                    // Restaurant has default hours but the requested time is outside those hours
+                    StringBuilder defaultTimesMessage = new StringBuilder("Restaurant is only open at the following times on " + dayName + ": ");
+                    for (int i = 0; i < defaultHours.size(); i++) {
+                        RestaurantHoursUtil.TimeRange range = defaultHours.get(i);
+                        defaultTimesMessage.append(range.toString());
+                        if (i < defaultHours.size() - 1) {
+                            defaultTimesMessage.append(", ");
+                        }
+                    }
+                    throw new InvalidOrderException(defaultTimesMessage.toString());
                 }
-            }
-
-            if (!isWithinWorkingHours) {
-                throw new InvalidOrderException("Restaurant is not open at the requested delivery time");
+            } else {
+                // Restaurant has specific hours but the requested time is outside those hours
+                StringBuilder availableHours = new StringBuilder("Restaurant is open at the following times on " + dayName + ": ");
+                for (int i = 0; i < workingHours.size(); i++) {
+                    RestaurantWorkingHours hours = workingHours.get(i);
+                    availableHours.append(hours.getStartTime().toString()).append(" - ").append(hours.getEndTime().toString());
+                    if (i < workingHours.size() - 1) {
+                        availableHours.append(", ");
+                    }
+                }
+                throw new InvalidOrderException("Restaurant is not open at the requested delivery time. " + availableHours.toString());
             }
         }
     }
