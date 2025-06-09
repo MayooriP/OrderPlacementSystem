@@ -8,6 +8,8 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 
+import com.restaurant.ordersystem.model.PaymentMethod;
+
 @Data
 @NoArgsConstructor
 @AllArgsConstructor

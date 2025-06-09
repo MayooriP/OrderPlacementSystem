@@ -14,6 +14,23 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+/**
+ * Unit tests for the OrderService class using Mockito for mocking dependencies.
+ *
+ * Mocking is a technique used in unit testing where real objects are replaced with simulated ones
+ * that mimic the behavior of the real objects in a controlled way. This approach provides several benefits:
+ *
+ * 1. Isolation: Tests focus on OrderService behavior without depending on actual implementations of repositories and services
+ * 2. Speed: Tests run faster without actual database operations or external service calls
+ * 3. Reliability: Tests don't depend on external systems that might be unavailable or inconsistent
+ * 4. Control: Allows testing specific scenarios including edge cases and error conditions
+ *
+ * In these tests, Mockito is used to:
+ * - Create mock objects with @Mock annotations
+ * - Configure mock behavior with when().thenReturn() statements
+ * - Verify interactions with verify() statements
+ */
+
 import java.math.BigDecimal;
 import java.time.DayOfWeek;
 import java.time.LocalDateTime;
@@ -163,14 +180,25 @@ class OrderServiceTest {
         orderRequest.setDeliveryDate(LocalDateTime.now().plusHours(2));
     }
 
+    /**
+     * Test case for placing a valid order.
+     *
+     * This test demonstrates the basic mocking approach:
+     * 1. Mock repositories to return test data instead of querying a database
+     * 2. Mock services to return predefined values instead of making actual service calls
+     * 3. Use argument matchers (any(), anyInt(), eq()) to handle different parameter scenarios
+     * 4. Use thenAnswer() to provide dynamic responses based on input parameters
+     */
     @Test
     void testPlaceOrder_ValidRequest_ReturnsOrderResponse() {
-        // Arrange
+        // Arrange - Configure mock objects to return test data
         when(customerRepository.findById(1)).thenReturn(Optional.of(customer));
         when(restaurantRepository.findById(1)).thenReturn(Optional.of(restaurant));
         when(cartRepository.findByCustomerAndStatus(customer, "ACTIVE")).thenReturn(Optional.of(cart));
         when(cartItemRepository.findByCart(cart)).thenReturn(cartItems);
         when(paymentService.createPayment(anyInt(), any(BigDecimal.class), anyString())).thenReturn("payment123");
+
+        // Use thenAnswer to dynamically set the order ID when save is called
         when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> {
             Order order = invocation.getArgument(0);
             order.setOrderId("order123");
@@ -267,9 +295,20 @@ class OrderServiceTest {
         verify(restaurantHoursUtil).isRestaurantOpen(eq(restaurant), any(LocalDateTime.class));
     }
 
+    /**
+     * Test case for attempting to place an order when the restaurant is closed.
+     *
+     * This test demonstrates how mocking can be used to test error conditions:
+     * 1. Mock the RestaurantHoursUtil to simulate a restaurant being closed
+     * 2. Mock multiple related method calls to create a complete test scenario
+     * 3. Test exception handling by verifying that the expected exception is thrown
+     *
+     * This approach allows testing error handling without needing to set up complex
+     * data conditions in a real database or waiting for specific times of day.
+     */
     @Test
     void testPlaceOrder_RestaurantClosed_ThrowsException() {
-        // Arrange
+        // Arrange - Basic repository mocks
         when(customerRepository.findById(1)).thenReturn(Optional.of(customer));
         when(restaurantRepository.findById(1)).thenReturn(Optional.of(restaurant));
 
@@ -278,13 +317,14 @@ class OrderServiceTest {
         orderRequest.setDeliveryDate(deliveryDate);
 
         // Mock restaurant hours util to return false (restaurant is closed)
+        // This is the key mock that triggers the error condition we want to test
         when(restaurantHoursUtil.isRestaurantOpen(eq(restaurant), any(LocalDateTime.class))).thenReturn(false);
 
-        // Mock working hours for error message
+        // Mock working hours for error message - return empty list to simulate no custom hours
         List<RestaurantWorkingHours> workingHours = new ArrayList<>();
         when(restaurantHoursUtil.getWorkingHoursForDay(eq(restaurant), eq(DayOfWeek.MONDAY))).thenReturn(workingHours);
 
-        // Mock default hours for error message
+        // Mock default hours for error message - return empty list to simulate restaurant closed on Monday
         List<RestaurantHoursUtil.TimeRange> defaultHours = new ArrayList<>();
         when(restaurantHoursUtil.getDefaultWorkingHours(eq(DayOfWeek.MONDAY))).thenReturn(defaultHours);
 

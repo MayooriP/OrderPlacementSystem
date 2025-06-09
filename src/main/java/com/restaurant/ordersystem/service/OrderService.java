@@ -317,9 +317,9 @@ public class OrderService {
             throw new InvalidOrderException("Payment method is required");
         }
 
-        if (!orderRequest.getPaymentMethod().equals("Pay Online") &&
-            !orderRequest.getPaymentMethod().equals("Pay at Restaurant")) {
-            throw new InvalidOrderException("Invalid payment method. Allowed values: 'Pay Online', 'Pay at Restaurant'");
+        if (!orderRequest.getPaymentMethod().equals("Cash") &&
+            !orderRequest.getPaymentMethod().equals("UPI")) {
+            throw new InvalidOrderException("Invalid payment method. Allowed values: 'Pay Online', 'Pay Cash'");
         }
 
         if (orderRequest.getOrderDate() == null) {
@@ -465,7 +465,7 @@ public class OrderService {
         // Get payment details
         Payment payment = paymentService.getPaymentById(order.getPaymentId());
         if (payment != null) {
-            dto.setPaymentMethod(payment.getPaymentMethod());
+            dto.setPaymentMethod(payment.getPaymentMethod().name());
             dto.setPaymentStatus(payment.getStatus().name());
         }
 

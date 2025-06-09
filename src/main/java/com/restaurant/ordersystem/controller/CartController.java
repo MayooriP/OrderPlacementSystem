@@ -1,9 +1,11 @@
 package com.restaurant.ordersystem.controller;
 
 import com.restaurant.ordersystem.dto.CartDTO;
+import com.restaurant.ordersystem.dto.CartItemDTO;
 import com.restaurant.ordersystem.model.Cart;
 import com.restaurant.ordersystem.model.CartItem;
 import com.restaurant.ordersystem.model.Customer;
+import java.util.List;
 import com.restaurant.ordersystem.model.MenuItem;
 import com.restaurant.ordersystem.repository.CartItemRepository;
 import com.restaurant.ordersystem.repository.CartRepository;
@@ -52,6 +54,14 @@ public class CartController {
         CartDTO cartDTO = cartService.getCartDTO(customerId);
         logger.info("Retrieved cart for customer ID: {}", customerId);
         return new ResponseEntity<>(cartDTO, HttpStatus.OK);
+    }
+
+    @PostMapping("/{customerId}")
+    public ResponseEntity<CartDTO> addOrUpdateCart(
+            @PathVariable Integer customerId,
+            @RequestBody List<CartItemDTO> cartItems) {
+        CartDTO updatedCart = cartService.addOrUpdateCartItems(customerId, cartItems);
+        return ResponseEntity.ok(updatedCart);
     }
 
     @PostMapping("/add")
@@ -175,28 +185,34 @@ public class CartController {
         return new ResponseEntity<>(response, HttpStatus.OK);
     }
 
-    @DeleteMapping("/customer/{customerId}")
+   @DeleteMapping("/customer/{customerId}")
     public ResponseEntity<Map<String, Object>> clearCart(@PathVariable Integer customerId) {
-        logger.info("Clearing cart for customer ID: {}", customerId);
+    logger.info("Clearing cart for customer ID: {}", customerId);
 
-        Customer customer = customerRepository.findById(customerId)
-                .orElseThrow(() -> new ResourceNotFoundException("Customer", "id", customerId));
+    Customer customer = customerRepository.findById(customerId)
+            .orElseThrow(() -> new ResourceNotFoundException("Customer", "id", customerId));
 
-        Cart cart = cartRepository.findByCustomerAndStatus(customer, "ACTIVE")
-                .orElseThrow(() -> new ResourceNotFoundException("Active cart not found for customer with id: " + customerId));
+    Cart cart = cartRepository.findByCustomerAndStatus(customer, "ACTIVE")
+            .orElseThrow(() -> new ResourceNotFoundException("Active cart not found for customer with id: " + customerId));
 
-        // Clear cart items
-        cart.getCartItems().clear();
-        cart.setTotalAmount(BigDecimal.ZERO);
-        cart.setLastModifiedDateTime(LocalDateTime.now());
-        cartRepository.save(cart);
-
-        logger.info("Cleared cart for customer ID: {}", customerId);
-
-        Map<String, Object> response = new HashMap<>();
-        response.put("status", "success");
-        response.put("message", "Cart cleared");
-
-        return new ResponseEntity<>(response, HttpStatus.OK);
+    // Clear cart items
+    List<CartItem> cartItems = cart.getCartItems();
+    if (!cartItems.isEmpty()) {
+        cartItemRepository.deleteAll(cartItems); // Deletes from DB
+        cartItems.clear(); // Clears in memory
     }
+
+    cart.setTotalAmount(BigDecimal.ZERO);
+    cart.setLastModifiedDateTime(LocalDateTime.now());
+    cartRepository.save(cart);
+
+    logger.info("Cleared cart for customer ID: {}", customerId);
+
+    Map<String, Object> response = new HashMap<>();
+    response.put("status", "success");
+    response.put("message", "Cart cleared");
+
+    return new ResponseEntity<>(response, HttpStatus.OK);
+}
+
 }
