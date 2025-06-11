@@ -1,7 +1,9 @@
 package com.restaurant.ordersystem.controller;
 
+import com.restaurant.ordersystem.dto.AddToCartRequestDTO;
 import com.restaurant.ordersystem.dto.CartDTO;
 import com.restaurant.ordersystem.dto.CartItemDTO;
+import com.restaurant.ordersystem.dto.CartItemRequestDTO;
 import com.restaurant.ordersystem.model.Cart;
 import com.restaurant.ordersystem.model.CartItem;
 import com.restaurant.ordersystem.model.Customer;
@@ -22,6 +24,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -56,12 +59,60 @@ public class CartController {
         return new ResponseEntity<>(cartDTO, HttpStatus.OK);
     }
 
-    @PostMapping("/{customerId}")
-    public ResponseEntity<CartDTO> addOrUpdateCart(
-            @PathVariable Integer customerId,
-            @RequestBody List<CartItemDTO> cartItems) {
-        CartDTO updatedCart = cartService.addOrUpdateCartItems(customerId, cartItems);
-        return ResponseEntity.ok(updatedCart);
+    // SPECIFIC ROUTES FIRST - For multiple items 
+    @PostMapping("/addmultiple")
+    public ResponseEntity<Map<String, Object>> addMultipleItemsToCart(@RequestBody AddToCartRequestDTO requestDTO) {
+        Integer customerId = requestDTO.getCustomerId();
+        List<CartItemRequestDTO> items = requestDTO.getItems();
+
+        Customer customer = customerRepository.findById(customerId)
+                .orElseThrow(() -> new ResourceNotFoundException("Customer", "id", customerId));
+
+        Cart cart = cartRepository.findByCustomerAndStatus(customer, "ACTIVE")
+                .orElseGet(() -> {
+                    Cart newCart = new Cart();
+                    newCart.setCustomer(customer);
+                    newCart.setTotalAmount(BigDecimal.ZERO);
+                    newCart.setCreatedDateTime(LocalDateTime.now());
+                    newCart.setLastModifiedDateTime(LocalDateTime.now());
+                    newCart.setStatus("ACTIVE");
+                    return cartRepository.save(newCart);
+                });
+
+        BigDecimal totalAdded = BigDecimal.ZERO;
+        List<Integer> cartItemIds = new ArrayList<>();
+
+        for (CartItemRequestDTO item : items) {
+            MenuItem menuItem = menuItemRepository.findById(item.getMenuItemId())
+                    .orElseThrow(() -> new ResourceNotFoundException("MenuItem", "id", item.getMenuItemId()));
+
+            BigDecimal price = menuItem.getPrice();
+            BigDecimal subtotal = price.multiply(BigDecimal.valueOf(item.getQuantity()));
+
+            CartItem cartItem = new CartItem();
+            cartItem.setCart(cart);
+            cartItem.setMenuItem(menuItem);
+            cartItem.setQuantity(item.getQuantity());
+            cartItem.setPrice(price);
+            cartItem.setSubtotal(subtotal);
+            cartItem.setSpecialInstructions(item.getSpecialInstructions());
+
+            cartItem = cartItemRepository.save(cartItem);
+            cartItemIds.add(cartItem.getCartItemId());
+            totalAdded = totalAdded.add(subtotal);
+        }
+
+        cart.setTotalAmount(cart.getTotalAmount().add(totalAdded));
+        cart.setLastModifiedDateTime(LocalDateTime.now());
+        cartRepository.save(cart);
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("status", "success");
+        response.put("message", "Items added to cart");
+        response.put("cartId", cart.getCartId());
+        response.put("cartItemIds", cartItemIds);
+
+        return new ResponseEntity<>(response, HttpStatus.CREATED);
     }
 
     @PostMapping("/add")
@@ -119,6 +170,15 @@ public class CartController {
         response.put("cartItemId", cartItem.getCartItemId());
 
         return new ResponseEntity<>(response, HttpStatus.CREATED);
+    }
+
+    // GENERIC ROUTE MOVED TO END - This MUST come after specific routes
+    @PostMapping("/{customerId}")
+    public ResponseEntity<CartDTO> addOrUpdateCart(
+            @PathVariable Integer customerId,
+            @RequestBody List<CartItemDTO> cartItems) {
+        CartDTO updatedCart = cartService.addOrUpdateCartItems(customerId, cartItems);
+        return ResponseEntity.ok(updatedCart);
     }
 
     @PutMapping("/item/{cartItemId}")
@@ -185,34 +245,33 @@ public class CartController {
         return new ResponseEntity<>(response, HttpStatus.OK);
     }
 
-   @DeleteMapping("/customer/{customerId}")
+    @DeleteMapping("/customer/{customerId}")
     public ResponseEntity<Map<String, Object>> clearCart(@PathVariable Integer customerId) {
-    logger.info("Clearing cart for customer ID: {}", customerId);
+        logger.info("Clearing cart for customer ID: {}", customerId);
 
-    Customer customer = customerRepository.findById(customerId)
-            .orElseThrow(() -> new ResourceNotFoundException("Customer", "id", customerId));
+        Customer customer = customerRepository.findById(customerId)
+                .orElseThrow(() -> new ResourceNotFoundException("Customer", "id", customerId));
 
-    Cart cart = cartRepository.findByCustomerAndStatus(customer, "ACTIVE")
-            .orElseThrow(() -> new ResourceNotFoundException("Active cart not found for customer with id: " + customerId));
+        Cart cart = cartRepository.findByCustomerAndStatus(customer, "ACTIVE")
+                .orElseThrow(() -> new ResourceNotFoundException("Active cart not found for customer with id: " + customerId));
 
-    // Clear cart items
-    List<CartItem> cartItems = cart.getCartItems();
-    if (!cartItems.isEmpty()) {
-        cartItemRepository.deleteAll(cartItems); // Deletes from DB
-        cartItems.clear(); // Clears in memory
+        // Clear cart items
+        List<CartItem> cartItems = cart.getCartItems();
+        if (!cartItems.isEmpty()) {
+            cartItemRepository.deleteAll(cartItems); // Deletes from DB
+            cartItems.clear(); // Clears in memory
+        }
+
+        cart.setTotalAmount(BigDecimal.ZERO);
+        cart.setLastModifiedDateTime(LocalDateTime.now());
+        cartRepository.save(cart);
+
+        logger.info("Cleared cart for customer ID: {}", customerId);
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("status", "success");
+        response.put("message", "Cart cleared");
+
+        return new ResponseEntity<>(response, HttpStatus.OK);
     }
-
-    cart.setTotalAmount(BigDecimal.ZERO);
-    cart.setLastModifiedDateTime(LocalDateTime.now());
-    cartRepository.save(cart);
-
-    logger.info("Cleared cart for customer ID: {}", customerId);
-
-    Map<String, Object> response = new HashMap<>();
-    response.put("status", "success");
-    response.put("message", "Cart cleared");
-
-    return new ResponseEntity<>(response, HttpStatus.OK);
-}
-
 }

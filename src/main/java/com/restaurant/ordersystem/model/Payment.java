@@ -37,6 +37,17 @@ public class Payment {
     @Id
     @Column(length = 36)
     private String paymentId;
+    @Column(name = "order_id")  // Add this annotation if your column name differs
+private String orderId;
+
+// Add getters and setters
+public String getOrderId() {
+    return orderId;
+}
+
+public void setOrderId(String orderId) {
+    this.orderId = orderId;
+}
 
     @ManyToOne
     @JoinColumn(name = "customer_id")

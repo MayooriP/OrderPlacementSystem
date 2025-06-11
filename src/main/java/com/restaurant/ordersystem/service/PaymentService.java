@@ -6,6 +6,9 @@ import com.restaurant.ordersystem.model.Payment;
 import com.restaurant.ordersystem.model.PaymentMethod;
 import com.restaurant.ordersystem.repository.CustomerRepository;
 import com.restaurant.ordersystem.repository.PaymentRepository;
+
+import software.amazon.awssdk.services.dynamodb.model.Get;
+
 import com.restaurant.ordersystem.model.PaymentStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -122,5 +125,28 @@ public class PaymentService {
         logger.warn("Cannot complete payment with ID: {} as it is not in PENDING status", paymentId);
     }
 }
+
+public void savePayment(Payment payment) {
+    paymentRepository.save(payment);
+}
+
+public Payment getPaymentByOrderId(String orderId) {
+    logger.info("Retrieving payment for order ID: {}", orderId);
+    
+    if (orderId == null) {
+        return null;
+    }
+    
+    Payment payment = paymentRepository.findByOrderId(orderId);
+    
+    if (payment != null) {
+        logger.info("Found payment with ID: {} for order ID: {}", payment.getPaymentId(), orderId);
+    } else {
+        logger.warn("No payment found for order ID: {}", orderId);
+    }
+    
+    return payment;
+}
+
 }
 

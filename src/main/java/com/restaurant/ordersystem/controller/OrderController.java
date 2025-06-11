@@ -2,7 +2,12 @@ package com.restaurant.ordersystem.controller;
 
 import com.restaurant.ordersystem.dto.OrderRequestDTO;
 import com.restaurant.ordersystem.dto.OrderResponseDTO;
+import com.restaurant.ordersystem.dto.PaymentStatusUpdateDTO;
+import com.restaurant.ordersystem.model.Payment;
+import com.restaurant.ordersystem.model.PaymentStatus;
 import com.restaurant.ordersystem.service.OrderService;
+import com.restaurant.ordersystem.service.PaymentService;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -21,9 +26,11 @@ public class OrderController {
     private static final Logger logger = LoggerFactory.getLogger(OrderController.class);
 
     private final OrderService orderService;
+    private final PaymentService paymentService;
 
-    public OrderController(OrderService orderService) {
+    public OrderController(OrderService orderService, PaymentService paymentService) {
         this.orderService = orderService;
+        this.paymentService = paymentService; 
     }
 
     @PostMapping
@@ -75,6 +82,30 @@ public class OrderController {
         logger.info("Retrieved {} orders in date range", orders.size());
         return new ResponseEntity<>(orders, HttpStatus.OK);
     }
+
+@PutMapping("/{orderId}/payment/status")
+public ResponseEntity<String> updatePaymentStatusByOrderId(
+        @PathVariable String orderId,
+        @RequestBody PaymentStatusUpdateDTO statusUpdateDTO) {
+    
+    logger.info("Updating payment status for order ID: {}", orderId);
+    
+    // Get the payment associated with this order
+    Payment payment = paymentService.getPaymentByOrderId(orderId);
+    if (payment == null) {
+        return new ResponseEntity<>("Payment not found for order", HttpStatus.NOT_FOUND);
+    }
+
+    PaymentStatus newStatus = statusUpdateDTO.getPaymentStatus();
+    payment.setStatus(newStatus);
+    payment.setLastModifiedDateTime(LocalDateTime.now());
+    paymentService.savePayment(payment);
+
+    logger.info("Payment status updated successfully for order ID: {}", orderId);
+    return new ResponseEntity<>("Payment status updated successfully", HttpStatus.OK);
+}
+
+
 
     @PutMapping("/{orderId}/cancel")
     public ResponseEntity<OrderResponseDTO> cancelOrder(@PathVariable String orderId) {

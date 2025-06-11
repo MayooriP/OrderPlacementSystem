@@ -11,4 +11,7 @@ import java.util.List;
 public interface PaymentRepository extends JpaRepository<Payment, String> {
     
     List<Payment> findByCustomer(Customer customer);
+    
+    // Add this method to find payment by order ID
+    Payment findByOrderId(String orderId);
 }
