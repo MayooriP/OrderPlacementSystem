@@ -25,6 +25,7 @@ public class CategoryController {
         this.categoryRepository = categoryRepository;
     }
 
+    // GET all categories
     @GetMapping
     public ResponseEntity<List<Category>> getAllCategories() {
         logger.info("Retrieving all categories");
@@ -33,12 +34,48 @@ public class CategoryController {
         return new ResponseEntity<>(categories, HttpStatus.OK);
     }
 
+    // GET category by ID
     @GetMapping("/{categoryId}")
     public ResponseEntity<Category> getCategoryById(@PathVariable Integer categoryId) {
         logger.info("Retrieving category with ID: {}", categoryId);
         Category category = categoryRepository.findById(categoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("Category", "id", categoryId));
-        logger.info("Retrieved category with ID: {}", categoryId);
         return new ResponseEntity<>(category, HttpStatus.OK);
+    }
+
+    // POST - Create new category
+    @PostMapping
+    public ResponseEntity<Category> createCategory(@RequestBody Category category) {
+        logger.info("Creating new category: {}", category.getName());
+        Category savedCategory = categoryRepository.save(category);
+        return new ResponseEntity<>(savedCategory, HttpStatus.CREATED);
+    }
+
+    // PUT - Update existing category
+    @PutMapping("/{categoryId}")
+    public ResponseEntity<Category> updateCategory(@PathVariable Integer categoryId,
+                                                   @RequestBody Category updatedCategoryData) {
+        logger.info("Updating category with ID: {}", categoryId);
+        Category category = categoryRepository.findById(categoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("Category", "id", categoryId));
+
+        category.setName(updatedCategoryData.getName());
+        category.setDescription(updatedCategoryData.getDescription());
+        category.setStatus(updatedCategoryData.getStatus());
+        category.setLastModifiedBy(updatedCategoryData.getLastModifiedBy());
+        category.setLastModifiedDateTime(updatedCategoryData.getLastModifiedDateTime());
+
+        Category updatedCategory = categoryRepository.save(category);
+        return new ResponseEntity<>(updatedCategory, HttpStatus.OK);
+    }
+
+    // DELETE - Remove category
+    @DeleteMapping("/{categoryId}")
+    public ResponseEntity<Void> deleteCategory(@PathVariable Integer categoryId) {
+        logger.info("Deleting category with ID: {}", categoryId);
+        Category category = categoryRepository.findById(categoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("Category", "id", categoryId));
+        categoryRepository.delete(category);
+        return new ResponseEntity<>(HttpStatus.NO_CONTENT);
     }
 }

@@ -8,6 +8,8 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 
+import com.restaurant.ordersystem.model.PaymentMethod;
+
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -27,6 +29,7 @@ public class OrderResponseDTO {
     private BigDecimal totalPrice;
     private BigDecimal discountValue;
     private BigDecimal finalPrice;
+    private Integer totalItems;
     private String couponCode;
     private String pickupInstructions;
     private List<OrderItemDTO> orderItems;
@@ -119,6 +122,15 @@ public class OrderResponseDTO {
     public void setOrderStatus(String orderStatus) {
         this.orderStatus = orderStatus;
     }
+
+    public Integer getTotalItems() {
+    return totalItems;
+    }
+
+    public void setTotalItems(Integer totalItems) {
+    this.totalItems = totalItems;
+    }
+
 
     public BigDecimal getTotalPrice() {
         return totalPrice;

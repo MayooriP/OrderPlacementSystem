@@ -76,7 +76,7 @@ public class Order {
     }
 
     public enum OrderStatus {
-        Received, Preparing, ReadyToPickup, OrderCompleted, Cancelled
+        Placed,Received, Preparing, ReadyToPickup, OrderCompleted, Cancelled
     }
 
     // Manually added getters and setters

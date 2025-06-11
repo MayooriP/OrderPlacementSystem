@@ -1,0 +1,268 @@
+# Database Schema: order_system
+This database supports a restaurant order placement system with customer management, menu items, cart functionality, order processing, payment handling, and various discount mechanisms.
+
+## Table: customers
+Stores information about customers who use the system to place orders. Contains personal details, contact information, and account status.
+| Column Name | Data Type | Constraints | Description |
+|-------------|-----------|-------------|-------------|
+| customer_id | int | PK, AUTO_INCREMENT | Unique identifier for the customer |
+| user_id | int | | Reference to user account |
+| full_name | varchar(255) | | Customer's full name |
+| email | varchar(255) | | Customer's email address |
+| created_date_time | datetime | | When the record was created |
+| created_by | varchar(255) | | Who created the record |
+| last_modified_date_time | datetime | | When the record was last modified |
+| last_modified_by | varchar(255) | | Who last modified the record |
+| status | varchar(50) | | Status of the customer record |
+| first_name | varchar(255) | | Customer's first name |
+| DOB | date | | Date of birth |
+| gender | enum('Male','Female','Prefer not to say') | | Customer's gender |
+| encrypted_phone_number | varchar(255) | NOT NULL | Encrypted phone number |
+| encrypted_email | varchar(255) | | Encrypted email address |
+
+## Table: restaurants
+Stores information about restaurants in the system. Contains details like name, contact information, address, and operational status.
+| Column Name | Data Type | Constraints | Description |
+|-------------|-----------|-------------|-------------|
+| restaurant_id | int | PK, AUTO_INCREMENT | Unique identifier for the restaurant |
+| name | varchar(255) | NOT NULL | Restaurant name |
+| description | text | | Restaurant description |
+| address | text | | Restaurant address |
+| phone_number | varchar(20) | NOT NULL | Restaurant phone number |
+| email | varchar(255) | NOT NULL | Restaurant email address |
+| opening_hours | varchar(255) | | General opening hours information |
+| logo_url | varchar(255) | | URL to restaurant logo |
+| created_date_time | datetime | | When the record was created |
+| created_by | varchar(255) | | Who created the record |
+| last_modified_date_time | datetime | | When the record was last modified |
+| last_modified_by | varchar(255) | | Who last modified the record |
+| status | varchar(50) | | Status of the restaurant record |
+
+## Table: restaurant_working_hours
+Defines the operating hours for each restaurant by day of the week. Used to determine if a restaurant is open for a specific order delivery time.
+| Column Name | Data Type | Constraints | Description |
+|-------------|-----------|-------------|-------------|
+| restaurant_working_id | int | PK, AUTO_INCREMENT | Unique identifier for the working hours record |
+| restaurant_id | int | FK | Reference to restaurant |
+| day_of_the_week | varchar(10) | | Day of the week (e.g., MONDAY, TUESDAY) |
+| start_time | time | NOT NULL | Opening time |
+| end_time | time | NOT NULL | Closing time |
+| created_date_time | datetime | | When the record was created |
+| created_by | varchar(255) | | Who created the record |
+| last_modified_date_time | datetime | | When the record was last modified |
+| last_modified_by | varchar(255) | | Who last modified the record |
+| status | varchar(50) | | Status of the record |
+| date | date | | Specific date for special hours |
+
+## Table: categories
+Stores menu categories for organizing menu items. Used for grouping and filtering menu items by type.
+| Column Name | Data Type | Constraints | Description |
+|-------------|-----------|-------------|-------------|
+| category_id | int | PK, AUTO_INCREMENT | Unique identifier for the category |
+| name | varchar(255) | NOT NULL | Category name |
+| description | varchar(255) | | Category description |
+| created_date_time | datetime | | When the record was created |
+| created_by | varchar(255) | | Who created the record |
+| last_modified_date_time | datetime | | When the record was last modified |
+| last_modified_by | varchar(255) | | Who last modified the record |
+| status | varchar(50) | | Status of the category record |
+
+## Table: subcategories
+Stores subcategories that further organize menu items within main categories. Provides more granular classification of menu items.
+| Column Name | Data Type | Constraints | Description |
+|-------------|-----------|-------------|-------------|
+| subcategory_id | int | PK, AUTO_INCREMENT | Unique identifier for the subcategory |
+| name | varchar(255) | NOT NULL | Subcategory name |
+| description | varchar(255) | | Subcategory description |
+| category_id | int | FK | Reference to parent category |
+| created_date_time | datetime | | When the record was created |
+| created_by | varchar(255) | | Who created the record |
+| last_modified_date_time | datetime | | When the record was last modified |
+| last_modified_by | varchar(255) | | Who last modified the record |
+| status | varchar(50) | | Status of the subcategory record |
+
+## Table: menu_items
+Stores the food and beverage items available for ordering. Contains details like name, description, price, and availability status.
+| Column Name | Data Type | Constraints | Description |
+|-------------|-----------|-------------|-------------|
+| item_id | int | PK, AUTO_INCREMENT | Unique identifier for the menu item |
+| name | varchar(255) | NOT NULL | Item name |
+| description | text | | Item description |
+| category_id | int | FK | Reference to category |
+| subcategory_id | int | FK | Reference to subcategory |
+| price | decimal(10,2) | NOT NULL | Base price of the item |
+| image_url | varchar(255) | | URL to item image |
+| available | boolean | | Whether the item is available |
+| created_date_time | datetime | | When the record was created |
+| created_by | varchar(255) | | Who created the record |
+| last_modified_date_time | datetime | | When the record was last modified |
+| last_modified_by | varchar(255) | | Who last modified the record |
+| status | varchar(50) | | Status of the menu item record |
+
+## Table: variants
+Stores variations of menu items such as sizes, flavors, or options. Allows for customization of menu items with different pricing.
+| Column Name | Data Type | Constraints | Description |
+|-------------|-----------|-------------|-------------|
+| variant_id | int | PK, AUTO_INCREMENT | Unique identifier for the variant |
+| variant_name | varchar(255) | NOT NULL | Variant name |
+| item_id | int | FK, NOT NULL | Reference to menu item |
+| variant_type | varchar(50) | NOT NULL | Type of variant (e.g., size, flavor) |
+| price | decimal(10,2) | NOT NULL | Additional price for this variant |
+| available | boolean | NOT NULL | Whether the variant is available |
+| created_date_time | datetime | | When the record was created |
+| created_by | varchar(255) | | Who created the record |
+| last_modified_date_time | datetime | | When the record was last modified |
+| last_modified_by | varchar(255) | | Who last modified the record |
+| status | varchar(50) | | Status of the variant record |
+| caution | text | | Warning or special note about the variant |
+| attribute | varchar(255) | | Additional attribute information |
+| listing_order | int | NOT NULL | Order in which to display the variant |
+
+## Table: carts
+Stores shopping carts for customers. Tracks the current state of a customer's order before it is finalized and submitted.
+| Column Name | Data Type | Constraints | Description |
+|-------------|-----------|-------------|-------------|
+| cart_id | int | PK, AUTO_INCREMENT | Unique identifier for the cart |
+| customer_id | int | FK, NOT NULL | Reference to customer |
+| total_amount | decimal(10,2) | | Total amount of all items in cart |
+| created_date_time | datetime | | When the cart was created |
+| last_modified_date_time | datetime | | When the cart was last modified |
+| status | varchar(50) | | Status of the cart (e.g., ACTIVE, COMPLETED) |
+
+## Table: cart_items
+Stores individual items in a customer's cart. Contains details about each menu item, its variant, quantity, and price.
+| Column Name | Data Type | Constraints | Description |
+|-------------|-----------|-------------|-------------|
+| cart_item_id | int | PK, AUTO_INCREMENT | Unique identifier for the cart item |
+| cart_id | int | FK, NOT NULL | Reference to cart |
+| item_id | int | FK, NOT NULL | Reference to menu item |
+| variant_id | int | FK | Reference to variant |
+| quantity | int | | Quantity of the item |
+| price | decimal(10,2) | | Price per unit |
+| subtotal | decimal(10,2) | | Total price for this item (price * quantity) |
+| special_instructions | varchar(255) | | Special instructions for this item |
+
+## Table: orders
+Stores finalized customer orders. Contains order details, delivery information, payment references, and tracks the order status throughout its lifecycle.
+| Column Name | Data Type | Constraints | Description |
+|-------------|-----------|-------------|-------------|
+| order_id | varchar(36) | PK | Unique identifier for the order (UUID) |
+| customer_id | int | FK | Reference to customer |
+| restaurant_id | int | FK | Reference to restaurant |
+| payment_id | varchar(36) | FK | Reference to payment |
+| order_date | datetime | NOT NULL | When the order was placed |
+| delivery_date | datetime | NOT NULL | When the order is to be delivered/picked up |
+| status | enum('Received','Preparing','Ready To Pickup','Order Completed','Cancelled') | | Current status of the order |
+| coupon_id | int | FK | Reference to applied coupon |
+| cooking_instructions | varchar(80) | | Special cooking instructions |
+| pickup_instructions | varchar(80) | | Special pickup instructions |
+| last_modified_date_time | datetime | | When the order was last modified |
+| status_history | json | | History of status changes |
+| square_order_id | varchar(255) | | External order ID in Square system |
+
+## Table: order_items
+Stores individual items within an order. Contains a snapshot of menu item details at the time of order to maintain historical accuracy.
+| Column Name | Data Type | Constraints | Description |
+|-------------|-----------|-------------|-------------|
+| order_item_id | int | PK, AUTO_INCREMENT | Unique identifier for the order item |
+| order_id | varchar(36) | FK, NOT NULL | Reference to order |
+| item_id | int | FK | Reference to menu item |
+| variant_id | int | FK | Reference to variant |
+| item_name | varchar(255) | | Name of the item (snapshot) |
+| category_name | varchar(255) | | Category name (snapshot) |
+| subcategory_name | varchar(255) | | Subcategory name (snapshot) |
+| variant_name | varchar(255) | | Variant name (snapshot) |
+| price | decimal(10,2) | | Price per unit (snapshot) |
+| quantity | int | | Quantity ordered |
+| subtotal | decimal(10,2) | | Total price for this item |
+| special_instructions | varchar(255) | | Special instructions for this item |
+| is_free_item | boolean | | Whether this is a free item (e.g., from a voucher) |
+
+## Table: payments
+Stores payment information for orders. Tracks payment status, method, and transaction details for financial reconciliation.
+| Column Name | Data Type | Constraints | Description |
+|-------------|-----------|-------------|-------------|
+| payment_id | varchar(36) | PK | Unique identifier for the payment (UUID) |
+| customer_id | int | FK | Reference to customer |
+| amount | decimal(10,2) | NOT NULL | Payment amount |
+| status | enum('PENDING','PAID','FAILED','REFUNDED','CANCELLED') | | Payment status |
+| payment_method | varchar(255) | NOT NULL | Method of payment |
+| payment_date | datetime | | When the payment was processed |
+| transaction_id | varchar(255) | | External transaction ID |
+| created_date_time | datetime | | When the payment record was created |
+| last_modified_date_time | datetime | | When the payment record was last modified |
+
+## Table: coupons
+Stores discount coupons that can be applied to orders. Contains details about discount amount, validity period, and usage restrictions.
+| Column Name | Data Type | Constraints | Description |
+|-------------|-----------|-------------|-------------|
+| coupon_id | int | PK, AUTO_INCREMENT | Unique identifier for the coupon |
+| coupon_code | varchar(255) | NOT NULL, UNIQUE | Coupon code |
+| description | text | | Coupon description |
+| status | enum('Active','Inactive') | | Coupon status |
+| coupon_discount_percentage | int | NOT NULL | Discount percentage |
+| max_amount | int | NOT NULL | Maximum discount amount |
+| coupon_name | varchar(255) | NOT NULL | Coupon name |
+| min_order_value | float | NOT NULL | Minimum order value for coupon to apply |
+| discount_type | varchar(255) | NOT NULL | Type of discount |
+| limit_per_user | int | | Maximum uses per user |
+| start_date | datetime | NOT NULL | When the coupon becomes valid |
+| end_date | datetime | | When the coupon expires |
+| image_url | varchar(255) | | URL to coupon image |
+
+## Table: vouchers
+Stores vouchers that can be redeemed for discounts or free items. Similar to coupons but typically customer-specific and often issued as rewards.
+| Column Name | Data Type | Constraints | Description |
+|-------------|-----------|-------------|-------------|
+| voucher_id | int | PK, AUTO_INCREMENT | Unique identifier for the voucher |
+| voucher_code | varchar(255) | NOT NULL, UNIQUE | Voucher code |
+| description | varchar(255) | | Voucher description |
+| status | enum('Active','Inactive','Expired','Used') | | Voucher status |
+| discount_percentage | int | | Discount percentage |
+| discount_amount | decimal(10,2) | | Fixed discount amount |
+| item_id | int | FK | Reference to free item |
+| customer_id | int | FK | Customer the voucher belongs to |
+| expiry_date | datetime | | When the voucher expires |
+| is_used | boolean | | Whether the voucher has been used |
+| used_date | datetime | | When the voucher was used |
+| created_date_time | datetime | | When the voucher was created |
+
+## Table: referrals
+Stores customer referral information. Tracks when customers refer others to the system and manages the associated rewards.
+| Column Name | Data Type | Constraints | Description |
+|-------------|-----------|-------------|-------------|
+| referral_id | int | PK, AUTO_INCREMENT | Unique identifier for the referral |
+| referral_code | varchar(255) | NOT NULL, UNIQUE | Referral code |
+| referrer_id | int | FK, NOT NULL | Customer who referred |
+| referred_id | int | FK | Customer who was referred |
+| is_used | boolean | | Whether the referral has been used |
+| used_date | datetime | | When the referral was used |
+| created_date_time | datetime | | When the referral was created |
+| status | enum('Active','Used','Expired') | | Referral status |
+
+## Table: reward_items
+Stores free menu items awarded to customers as rewards. Tracks which items are available as rewards and their redemption status.
+| Column Name | Data Type | Constraints | Description |
+|-------------|-----------|-------------|-------------|
+| reward_item_id | int | PK, AUTO_INCREMENT | Unique identifier for the reward item |
+| customer_id | int | FK, NOT NULL | Customer who earned the reward |
+| item_id | int | FK, NOT NULL | Menu item that is rewarded |
+| is_used | boolean | | Whether the reward has been used |
+| expiry_date | datetime | | When the reward expires |
+| used_date | datetime | | When the reward was used |
+| created_date_time | datetime | | When the reward was created |
+| status | enum('Active','Used','Expired') | | Reward status |
+
+## Table: reward_vouchers
+Stores discount vouchers awarded to customers as rewards. Similar to reward_items but for monetary discounts rather than specific menu items.
+| Column Name | Data Type | Constraints | Description |
+|-------------|-----------|-------------|-------------|
+| reward_voucher_id | int | PK, AUTO_INCREMENT | Unique identifier for the reward voucher |
+| customer_id | int | FK, NOT NULL | Customer who earned the voucher |
+| discount_percentage | int | | Discount percentage |
+| discount_amount | decimal(10,2) | | Fixed discount amount |
+| is_used | boolean | | Whether the voucher has been used |
+| expiry_date | datetime | | When the voucher expires |
+| used_date | datetime | | When the voucher was used |
+| created_date_time | datetime | | When the voucher was created |
+| status | enum('Active','Used','Expired') | | Voucher status |

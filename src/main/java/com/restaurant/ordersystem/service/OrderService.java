@@ -107,65 +107,60 @@ public class OrderService {
             throw new InvalidOrderException("Cart is empty. Cannot place order with empty cart.");
         }
 
-        // 6. Calculate prices and apply discounts
-        BigDecimal totalPrice = cart.getTotalAmount();
-        BigDecimal discountValue = BigDecimal.ZERO;
-        String appliedCouponCode = null;
+       // 6. Calculate prices and apply discounts
+BigDecimal totalPrice = cart.getTotalAmount();
+BigDecimal discountValue = BigDecimal.ZERO;
+String appliedCouponCode = null;
 
-        // Apply coupon/voucher/referral if provided
-        if (orderRequest.getCouponCode() != null && !orderRequest.getCouponCode().isEmpty()) {
-            // Try to apply as coupon
+// Apply coupon/voucher/referral if provided
+String code = orderRequest.getCouponCode();
+if (code != null && !code.isEmpty()) {
+    try {
+        // Try as Coupon
+        Coupon coupon = discountService.validateCoupon(code);
+        discountValue = discountService.applyCouponDiscount(coupon, totalPrice);
+        appliedCouponCode = coupon.getCouponCode();
+        logger.info("Coupon applied successfully: {}", code);
+    } catch (InvalidCouponException e1) {
+        logger.info("Not a valid coupon, trying as voucher: {}", e1.getMessage());
+
+        try {
+            // Try as Voucher
+            Voucher voucher = discountService.validateVoucher(code);
+            discountValue = discountService.applyVoucherDiscount(voucher, totalPrice);
+            appliedCouponCode = voucher.getVoucherCode();
+            logger.info("Voucher applied successfully: {}", code);
+        } catch (InvalidCouponException e2) {
+            logger.info("Not a valid voucher, trying as referral: {}", e2.getMessage());
+
             try {
-                try {
-                    Coupon coupon = discountService.validateCoupon(orderRequest.getCouponCode());
-
-                    if (coupon != null) {
-                        discountValue = discountService.applyCouponDiscount(coupon, totalPrice);
-                        appliedCouponCode = coupon.getCouponCode();
-                    }
-                } catch (InvalidCouponException e) {
-                    logger.info("Not a valid coupon, trying as voucher: {}", e.getMessage());
-
-                    // Try to apply as voucher
-                    try {
-                        Voucher voucher = discountService.validateVoucher(orderRequest.getCouponCode());
-
-                        if (voucher != null) {
-                            discountValue = discountService.applyVoucherDiscount(voucher, totalPrice);
-                            appliedCouponCode = voucher.getVoucherCode();
-                        }
-                    } catch (InvalidCouponException ve) {
-                        logger.info("Not a valid voucher: {}", ve.getMessage());
-
-                        // Try to apply as referral
-                        try {
-                            Referral referral = discountService.validateReferral(orderRequest.getCouponCode(), customer);
-
-                            if (referral != null) {
-                                discountValue = discountService.applyReferralDiscount(referral, totalPrice);
-                                appliedCouponCode = referral.getReferralCode();
-
-                                // Mark referral as used
-                                discountService.markReferralAsUsed(referral);
-                            }
-                        } catch (Exception ex) {
-                            logger.warn("Invalid referral code: {} - {}", orderRequest.getCouponCode(), ex.getMessage());
-                        }
-                    }
-                }
-            } catch (Exception e) {
-                logger.error("Error applying discount: {}", e.getMessage());
+                // Try as Referral
+                Referral referral = discountService.validateReferral(code, customer);
+                discountValue = discountService.applyReferralDiscount(referral, totalPrice);
+                appliedCouponCode = referral.getReferralCode();
+                discountService.markReferralAsUsed(referral);
+                logger.info("Referral applied successfully: {}", code);
+            } catch (Exception e3) {
+                logger.warn("Invalid referral code: {} - {}", code, e3.getMessage());
             }
         }
+    } catch (Exception ex) {
+        logger.error("Error applying discount: {}", ex.getMessage());
+    }
+}
 
-        BigDecimal finalPrice = totalPrice.subtract(discountValue);
+BigDecimal finalPrice = totalPrice.subtract(discountValue);
 
-        // 7. Create payment
-        String paymentId = paymentService.createPayment(
-                customer.getCustomerId(),
-                finalPrice,
-                orderRequest.getPaymentMethod().equals("Pay Online") ? "PAID" : "PENDING"
-        );
+
+// 7. Create payment (only if online payment)
+        String paymentId = null;
+
+        if (orderRequest.getPaymentMethod().equalsIgnoreCase("UPI")) {
+        paymentId = paymentService.createPayment(
+        customer.getCustomerId(),
+        finalPrice,
+        PaymentStatus.PAID.name());  // using enum name to avoid typos
+        }
 
         // 8. Create order
         Order order = new Order();
@@ -300,6 +295,7 @@ public class OrderService {
         responseDTO.setCouponCode(appliedCouponCode);
         responseDTO.setPickupInstructions(orderRequest.getPickupInstructions());
         responseDTO.setOrderItems(orderItemDTOs);
+        responseDTO.setTotalItems(orderItemDTOs.stream().mapToInt(OrderItemDTO::getQuantity).sum());
 
         return responseDTO;
     }
@@ -317,9 +313,9 @@ public class OrderService {
             throw new InvalidOrderException("Payment method is required");
         }
 
-        if (!orderRequest.getPaymentMethod().equals("Pay Online") &&
-            !orderRequest.getPaymentMethod().equals("Pay at Restaurant")) {
-            throw new InvalidOrderException("Invalid payment method. Allowed values: 'Pay Online', 'Pay at Restaurant'");
+        if (!orderRequest.getPaymentMethod().equals("Cash") &&
+            !orderRequest.getPaymentMethod().equals("UPI")) {
+            throw new InvalidOrderException("Invalid payment method. Allowed values: 'Pay Online', 'Pay Cash'");
         }
 
         if (orderRequest.getOrderDate() == null) {
@@ -465,7 +461,7 @@ public class OrderService {
         // Get payment details
         Payment payment = paymentService.getPaymentById(order.getPaymentId());
         if (payment != null) {
-            dto.setPaymentMethod(payment.getPaymentMethod());
+            dto.setPaymentMethod(payment.getPaymentMethod().name());
             dto.setPaymentStatus(payment.getStatus().name());
         }
 
@@ -514,6 +510,32 @@ public class OrderService {
 
         return dto;
     }
+
+    public OrderResponseDTO updatePaymentStatus(String orderId, String newStatus) {
+    Order order = orderRepository.findById(orderId)
+            .orElseThrow(() -> new ResourceNotFoundException("Order", "id", orderId));
+
+    if (order.getPaymentId() == null) {
+        throw new InvalidOrderException("No payment associated with this order");
+    }
+
+    Payment payment = paymentService.getPaymentById(order.getPaymentId());
+
+    if (payment == null) {
+        throw new ResourceNotFoundException("Payment", "id", order.getPaymentId());
+    }
+
+    try {
+        PaymentStatus statusEnum = PaymentStatus.valueOf(newStatus.toUpperCase());
+        payment.setStatus(statusEnum);
+        paymentService.savePayment(payment); 
+    } catch (IllegalArgumentException e) {
+        throw new InvalidOrderException("Invalid payment status: " + newStatus);
+    }
+
+    return convertToDTO(order); // updated DTO reflects new payment status
+}
+
 }
 
 

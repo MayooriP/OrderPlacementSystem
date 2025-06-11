@@ -6,6 +6,9 @@ import lombok.NoArgsConstructor;
 
 import javax.validation.constraints.NotNull;
 import java.time.LocalDateTime;
+import com.restaurant.ordersystem.model.OrderStatus;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+
 
 @Data
 @NoArgsConstructor
@@ -30,6 +33,10 @@ public class OrderRequestDTO {
     private LocalDateTime deliveryDate;
 
     private String pickupInstructions;
+
+    @JsonDeserialize(converter = OrderStatus.OrderStatusConverter.class)
+    private OrderStatus status;
+
 
     // Manual getters and setters to handle Lombok issues
 

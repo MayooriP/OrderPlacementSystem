@@ -13,6 +13,7 @@ import javax.persistence.JoinColumn;
 import javax.persistence.ManyToOne;
 import javax.persistence.PrePersist;
 import javax.persistence.Table;
+import com.restaurant.ordersystem.model.PaymentStatus;
 
 @Entity
 @Table(name = "payments")
@@ -23,7 +24,7 @@ public class Payment {
     }
 
     public Payment(String paymentId, Customer customer, BigDecimal amount, PaymentStatus status,
-                  String paymentMethod, LocalDateTime paymentDate, String transactionId) {
+                  PaymentMethod paymentMethod, LocalDateTime paymentDate, String transactionId) {
         this.paymentId = paymentId;
         this.customer = customer;
         this.amount = amount;
@@ -36,6 +37,17 @@ public class Payment {
     @Id
     @Column(length = 36)
     private String paymentId;
+    @Column(name = "order_id")  // Add this annotation if your column name differs
+private String orderId;
+
+// Add getters and setters
+public String getOrderId() {
+    return orderId;
+}
+
+public void setOrderId(String orderId) {
+    this.orderId = orderId;
+}
 
     @ManyToOne
     @JoinColumn(name = "customer_id")
@@ -47,8 +59,10 @@ public class Payment {
     @Enumerated(EnumType.STRING)
     private PaymentStatus status;
 
-    @Column(nullable = false)
-    private String paymentMethod;
+     @Enumerated(EnumType.STRING)
+    @Column(nullable = false, name = "payment_method")
+    private PaymentMethod paymentMethod;
+
 
     private LocalDateTime paymentDate;
 
@@ -68,9 +82,6 @@ public class Payment {
         }
     }
 
-    public enum PaymentStatus {
-        PENDING, PAID, FAILED, REFUNDED, CANCELLED
-    }
 
     // Explicit getters and setters
     public String getPaymentId() {
@@ -105,13 +116,13 @@ public class Payment {
         this.status = status;
     }
 
-    public String getPaymentMethod() {
-        return paymentMethod;
-    }
+    public PaymentMethod getPaymentMethod() {
+    return paymentMethod;
+}
 
-    public void setPaymentMethod(String paymentMethod) {
-        this.paymentMethod = paymentMethod;
-    }
+public void setPaymentMethod(PaymentMethod paymentMethod) {
+    this.paymentMethod = paymentMethod;
+}
 
     public LocalDateTime getPaymentDate() {
         return paymentDate;

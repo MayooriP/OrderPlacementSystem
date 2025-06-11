@@ -8,9 +8,15 @@ import com.restaurant.ordersystem.model.Cart;
 import com.restaurant.ordersystem.model.CartItem;
 import com.restaurant.ordersystem.model.Customer;
 import com.restaurant.ordersystem.repository.CartRepository;
+import com.restaurant.ordersystem.repository.MenuItemRepository;
+import com.restaurant.ordersystem.repository.VariantRepository;
+
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -19,11 +25,16 @@ public class CartService {
     
     private final CartRepository cartRepository;
     private final CustomerService customerService;
+    private final MenuItemRepository menuItemRepository;
+    private final VariantRepository variantRepository;
+
     
     @Autowired
-    public CartService(CartRepository cartRepository, CustomerService customerService) {
+    public CartService(CartRepository cartRepository, CustomerService customerService, MenuItemRepository menuItemRepository, VariantRepository variantRepository) {
         this.cartRepository = cartRepository;
         this.customerService = customerService;
+        this.menuItemRepository = menuItemRepository;
+        this.variantRepository = variantRepository;
     }
     
     public Cart getActiveCartByCustomerId(Integer customerId) {
@@ -39,6 +50,52 @@ public class CartService {
             throw new InvalidOrderException("Cart is empty. Please add items to cart before placing an order.");
         }
     }
+
+    public CartDTO addOrUpdateCartItems(Integer customerId, List<CartItemDTO> cartItemDTOs) {
+    Customer customer = customerService.getCustomerById(customerId);
+
+    Cart cart = cartRepository.findByCustomerAndStatus(customer, "ACTIVE")
+            .orElseGet(() -> {
+                Cart newCart = new Cart();
+                newCart.setCustomer(customer);
+                newCart.setStatus("ACTIVE");
+                newCart.setTotalAmount(BigDecimal.ZERO);
+                newCart.setCartItems(new ArrayList<>());
+                newCart.setCreatedDateTime(LocalDateTime.now());
+                return newCart;
+            });
+
+    cart.getCartItems().clear();
+
+    BigDecimal totalAmount = BigDecimal.ZERO;
+    for (CartItemDTO itemDTO : cartItemDTOs) {
+        CartItem cartItem = new CartItem();
+        cartItem.setCart(cart);
+        menuItemRepository.findById(itemDTO.getMenuItemId()).ifPresent(cartItem::setMenuItem);
+        if (itemDTO.getVariantId() != null) {
+            variantRepository.findById(itemDTO.getVariantId()).ifPresent(cartItem::setVariant);
+        } else {
+            cartItem.setVariant(null);
+        }
+        cartItem.setQuantity(itemDTO.getQuantity());
+        cartItem.setPrice(itemDTO.getPrice());
+        cartItem.setSubtotal(itemDTO.getSubtotal());
+        cartItem.setSpecialInstructions(itemDTO.getSpecialInstructions());
+
+        cart.getCartItems().add(cartItem);
+        if (itemDTO.getSubtotal() != null) {
+            totalAmount = totalAmount.add(itemDTO.getSubtotal());
+        }
+    }
+
+    cart.setTotalAmount(totalAmount);
+    cart.setLastModifiedDateTime(LocalDateTime.now());
+
+    cartRepository.save(cart);
+
+    return getCartDTO(customerId);
+}
+
     
     public CartDTO getCartDTO(Integer customerId) {
         Cart cart = getActiveCartByCustomerId(customerId);
